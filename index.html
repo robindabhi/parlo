@@ -444,21 +444,25 @@ let VOICES=[];
 function loadVoices(){try{VOICES=speechSynthesis.getVoices()||[]}catch(e){VOICES=[]}return VOICES}
 const JOKE_VOICE=/^(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|kathy|eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley)\b/i;
 function voiceScore(v,tts){
-  const lang=(v.lang||'').replace('_','-').toLowerCase(),want=tts.toLowerCase(),n=v.name||'';
+  const lang=(v.lang||'').replace('_','-').toLowerCase(),want=tts.toLowerCase(),n=(v.name||'')+' '+(v.voiceURI||'');
   if(lang.slice(0,2)!==want.slice(0,2)||JOKE_VOICE.test(n))return -1;
   let s=lang===want?30:10;
-  if(/natural|neural|premium|enhanced|wavenet|online/i.test(n))s+=50;
+  if(/premium/i.test(n))s+=70;
+  if(/natural|neural|enhanced|wavenet|online/i.test(n))s+=50;
   if(/google/i.test(n))s+=40;
   if(/siri/i.test(n))s+=35;
   if(/samantha|daniel|karen|moira|tessa|rishi|serena|aaron|nicky|martha|arthur|thomas|amelie|anna|alice|monica|paulina|jorge|marie|helena|federica|luca/i.test(n))s+=20;
-  if(/compact|espeak|e-speak|robot/i.test(n))s-=40;
+  if(/compact|espeak|e-speak|robot|eloquence/i.test(n))s-=40;
   if(v.default)s+=2;
-  return s;
+  return Math.max(0,s);
 }
 function voicesFor(lang){const tts=LANGS[lang].tts;
   return loadVoices().map(v=>({v,s:voiceScore(v,tts)})).filter(x=>x.s>=0).sort((a,b)=>b.s-a.s).map(x=>x.v)}
 function voiceFor(lang){const list=voicesFor(lang),p=P(),want=p&&p.voices&&p.voices[lang];
-  return (want&&list.find(v=>v.name===want))||list[0]||null}
+  return (want&&(list.find(v=>v.voiceURI===want)||list.find(v=>v.name===want)))||list[0]||null}
+/* iPhone lists downloaded Premium/Enhanced voices under the same name as the basic one; the voiceURI tells them apart */
+const voiceLabel=v=>{const u=(v.voiceURI||'')+' '+v.name;const q=/premium/i.test(u)?' · Premium':/enhanced/i.test(u)?' · Enhanced':/compact/i.test(u)?' · Basic':'';
+  return v.name.replace(/\s*\((premium|enhanced)\)/i,'')+q+' ('+v.lang+')'}
 function say(text,slow){
   if(!hasTTS)return;
   const go=()=>{try{const lang=P().lang,l=LANGS[lang];speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);
@@ -999,12 +1003,12 @@ function renderMe(){
 function voicePicker(p){
   if(!hasTTS)return '';
   const list=voicesFor(p.lang),cur=voiceFor(p.lang),l=LANGS[p.lang];
-  const tip=/iPhone|iPad|Mac/i.test(navigator.userAgent)?'For a more natural voice: Settings → Accessibility → Spoken Content → Voices, pick the language and download an "Enhanced" or "Premium" voice. It\'s free.'
+  const tip=/iPhone|iPad|Mac/i.test(navigator.userAgent)?(list.some(v=>/premium/i.test(v.voiceURI||v.name))?'Premium voices sound the most natural. ':'No Premium voice found yet. ')+'To add one for free: Settings → Accessibility → Spoken Content → Voices → pick the language → choose a voice marked Premium (for English, Zoe or Ava) and download it. Then close and reopen this app.'
     :/Android/i.test(navigator.userAgent)?'For a more natural voice: Settings → search "Text-to-speech" → set the engine to Speech Services by Google → Install voice data, pick the language and download a voice. It\'s free.'
     :'Voices with "Natural", "Online" or "Google" in the name usually sound best.';
   return `<div><div style="font-weight:800;margin-bottom:6px">Voice for ${esc(l.name)}</div>
    ${list.length?`<div class="row" style="flex-wrap:wrap"><select class="field grow" id="voicesel" data-a="none" style="min-width:0;font-size:1rem;padding:12px">
-     ${list.map(v=>`<option value="${esc(v.name)}" ${cur&&v.name===cur.name?'selected':''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select>
+     ${list.map(v=>`<option value="${esc(v.voiceURI||v.name)}" ${cur&&v===cur?'selected':''}>${esc(voiceLabel(v))}</option>`).join('')}</select>
      <button class="btn ghost" data-a="testvoice">▶ Test</button></div>`
    :`<p class="muted" style="margin:0;font-weight:700">This device has no ${esc(l.name)} voice installed, so the browser's default voice is used.</p>`}
    <p class="muted" style="margin:6px 0 0;font-size:.85rem;font-weight:700">${tip}</p></div>`;
