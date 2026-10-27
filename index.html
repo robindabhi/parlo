@@ -439,14 +439,35 @@ function beep(ok){
   }catch(e){}
 }
 const hasTTS='speechSynthesis' in window;
+/* Voices: devices ship many voices of very different quality, so rank them and prefer natural-sounding ones */
+let VOICES=[];
+function loadVoices(){try{VOICES=speechSynthesis.getVoices()||[]}catch(e){VOICES=[]}return VOICES}
+const JOKE_VOICE=/^(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|kathy|eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley)\b/i;
+function voiceScore(v,tts){
+  const lang=(v.lang||'').replace('_','-').toLowerCase(),want=tts.toLowerCase(),n=v.name||'';
+  if(lang.slice(0,2)!==want.slice(0,2)||JOKE_VOICE.test(n))return -1;
+  let s=lang===want?30:10;
+  if(/natural|neural|premium|enhanced|wavenet|online/i.test(n))s+=50;
+  if(/google/i.test(n))s+=40;
+  if(/siri/i.test(n))s+=35;
+  if(/samantha|daniel|karen|moira|tessa|rishi|serena|aaron|nicky|martha|arthur|thomas|amelie|anna|alice|monica|paulina|jorge|marie|helena|federica|luca/i.test(n))s+=20;
+  if(/compact|espeak|e-speak|robot/i.test(n))s-=40;
+  if(v.default)s+=2;
+  return s;
+}
+function voicesFor(lang){const tts=LANGS[lang].tts;
+  return loadVoices().map(v=>({v,s:voiceScore(v,tts)})).filter(x=>x.s>=0).sort((a,b)=>b.s-a.s).map(x=>x.v)}
+function voiceFor(lang){const list=voicesFor(lang),p=P(),want=p&&p.voices&&p.voices[lang];
+  return (want&&list.find(v=>v.name===want))||list[0]||null}
 function say(text,slow){
   if(!hasTTS)return;
-  try{const l=LANGS[P().lang];speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang=l.tts;u.rate=slow?.6:.92;
-    const v=speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.replace('_','-').startsWith(l.tts.slice(0,2)));
-    if(v.length)u.voice=v.find(x=>x.lang.replace('_','-')===l.tts)||v[0];
-    speechSynthesis.speak(u)}catch(e){}
+  const go=()=>{try{const lang=P().lang,l=LANGS[lang];speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);
+    const v=voiceFor(lang);u.lang=v?v.lang:l.tts;if(v)u.voice=v;u.rate=slow?.65:.95;u.pitch=1;
+    setTimeout(()=>speechSynthesis.speak(u),40)}catch(e){}};
+  if(loadVoices().length)go();
+  else{let done=false;const once=()=>{if(!done){done=true;go()}};try{speechSynthesis.addEventListener('voiceschanged',once,{once:true})}catch(e){}setTimeout(once,800)}
 }
-if(hasTTS){try{speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{}}catch(e){}}
+if(hasTTS){loadVoices();try{speechSynthesis.addEventListener('voiceschanged',()=>{loadVoices();if(view.tab==='me'&&P())render()})}catch(e){}}
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 let speakBroken=false;
 
@@ -964,6 +985,7 @@ function renderMe(){
     <div><div style="font-weight:800;margin-bottom:6px">Language</div><div class="langs">${Object.entries(LANGS).map(([k,l])=>`<button data-a="setlang" data-v="${k}" class="${p.lang===k?'on':''}"><span>${l.flag}</span><div>${l.name}<div class="muted" style="font-size:.8rem">${p.courses[k]?Object.keys(p.courses[k].done).length+' lessons done':'Not started'}</div></div></button>`).join('')}</div></div>
     <div><div style="font-weight:800;margin-bottom:6px">Daily goal</div><div class="seg">${[[10,'Casual'],[20,'Regular'],[30,'Serious'],[50,'Intense']].map(([g,n])=>`<button class="${p.goal===g?'on':''}" data-a="goal" data-v="${g}">${n} · ${g} XP</button>`).join('')}</div></div>
     ${toggle('unlimited','Unlimited hearts','Good for younger kids: mistakes never stop a lesson',p.unlimited)}
+    ${voicePicker(p)}
     ${toggle('sound','Sound effects','Dings for right and wrong answers',S.sound)}
     ${toggle('listenOff','Listening exercises',hasTTS?'Play words out loud':'Not supported in this browser',!p.listenOff)}
     ${toggle('speakOff','Speaking exercises',SR?'Say sentences into the microphone':'Not supported in this browser',!p.speakOff&&!!SR)}
@@ -974,6 +996,21 @@ function renderMe(){
     <div class="row" style="flex-wrap:wrap"><button class="btn ghost grow" data-a="copybk">Copy code</button><button class="btn ghost grow" data-a="importbk">Restore from code</button></div></div>
    <button class="link" data-a="delp" style="color:var(--bad);align-self:center">Remove ${esc(p.name)} from this device</button>`;
 }
+function voicePicker(p){
+  if(!hasTTS)return '';
+  const list=voicesFor(p.lang),cur=voiceFor(p.lang),l=LANGS[p.lang];
+  const tip=/iPhone|iPad|Mac/i.test(navigator.userAgent)?'For a more natural voice: Settings → Accessibility → Spoken Content → Voices, pick the language and download an "Enhanced" or "Premium" voice. It\'s free.'
+    :/Android/i.test(navigator.userAgent)?'For a more natural voice: Settings → search "Text-to-speech" → set the engine to Speech Services by Google → Install voice data, pick the language and download a voice. It\'s free.'
+    :'Voices with "Natural", "Online" or "Google" in the name usually sound best.';
+  return `<div><div style="font-weight:800;margin-bottom:6px">Voice for ${esc(l.name)}</div>
+   ${list.length?`<div class="row" style="flex-wrap:wrap"><select class="field grow" id="voicesel" data-a="none" style="min-width:0;font-size:1rem;padding:12px">
+     ${list.map(v=>`<option value="${esc(v.name)}" ${cur&&v.name===cur.name?'selected':''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select>
+     <button class="btn ghost" data-a="testvoice">▶ Test</button></div>`
+   :`<p class="muted" style="margin:0;font-weight:700">This device has no ${esc(l.name)} voice installed, so the browser's default voice is used.</p>`}
+   <p class="muted" style="margin:6px 0 0;font-size:.85rem;font-weight:700">${tip}</p></div>`;
+}
+A.testvoice=()=>{const p=P(),w=W(p.lang,0,0),ph=PH(p.lang,0,0);say(w.t+'. '+ph.tg)};
+document.addEventListener('change',e=>{if(e.target.id==='voicesel'){const p=P();p.voices=p.voices||{};p.voices[p.lang]=e.target.value;save();A.testvoice()}});
 function toggle(k,label,sub,on){return `<div class="row"><div class="grow"><b>${label}</b><div class="muted" style="font-size:.88rem;font-weight:700">${sub}</div></div>
   <button class="seg-t" data-a="tog" data-v="${k}" role="switch" aria-checked="${on}" style="width:56px;height:32px;border-radius:99px;background:${on?'var(--brand)':'var(--line)'};position:relative;flex:none">
   <i style="position:absolute;top:4px;left:${on?28:4}px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s"></i></button></div>`}
