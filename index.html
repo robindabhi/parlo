@@ -380,7 +380,19 @@ function load(){
   let d=null;try{d=JSON.parse(localStorage.getItem(KEY))}catch(e){}
   return d&&d.profiles?d:{profiles:[],cur:null,sound:true};
 }
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+/* Progress is kept in localStorage and mirrored to IndexedDB, so one store being cleared or a write lost when iPhone closes the app doesn't wipe it */
+const idb=(()=>{let p;return()=>p||(p=new Promise((res,rej)=>{try{const r=indexedDB.open('parlo',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');
+  r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}catch(e){rej(e)}}))})();
+function idbPut(k,v){idb().then(db=>{db.transaction('kv','readwrite').objectStore('kv').put(v,k)}).catch(()=>{})}
+function idbGet(k){return idb().then(db=>new Promise(res=>{const r=db.transaction('kv').objectStore('kv').get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)})).catch(()=>null)}
+function save(){
+  S.savedAt=Date.now();const j=JSON.stringify(S);
+  try{localStorage.setItem(KEY,j)}catch(e){}
+  idbPut(KEY,j);
+}
+/* an unfinished lesson is saved too, so closing the app mid-lesson picks up where you left off */
+function saveLesson(){const v=L&&view.tab==='lesson'?JSON.stringify({pid:S.cur,tab:'lesson',L}):'';
+  try{v?localStorage.setItem(KEY+'.lesson',v):localStorage.removeItem(KEY+'.lesson')}catch(e){}idbPut(KEY+'.lesson',v)}
 const P=()=>S.profiles.find(p=>p.id===S.cur);
 function newProfile(name,avatar,lang){
   return {id:'p'+Date.now().toString(36),name,avatar,lang,xp:0,gems:50,hearts:5,heartAt:Date.now(),streak:0,bestStreak:0,lastDay:null,freeze:0,
@@ -505,6 +517,8 @@ function render(){
   const p=P();
   if(!p||view.tab==='welcome'){return renderWelcome()}
   upkeep(p);save();
+  if(!['lesson','result'].includes(view.tab)&&L)L=null;
+  if(view.tab!=='lesson'&&view.tab!=='result')saveLesson();
   if(view.tab==='lesson')return renderLesson();
   if(view.tab==='result')return renderResult();
   if(view.tab==='game')return renderGame();
@@ -555,6 +569,8 @@ function renderWelcome(){
     <div style="font-weight:800">I want to learn</div>
     <div class="langs">${Object.entries(LANGS).map(([k,l])=>`<button data-a="lg" data-v="${k}" class="${draft.lang===k?'on':''}"><span>${l.flag}</span><div>${l.name}<div class="muted" style="font-size:.8rem">${l.from?l.native:l.native}</div></div></button>`).join('')}</div>
     <button class="btn block" data-a="create" style="margin-top:6px">Start learning</button>
+    ${first&&(matchMedia('(display-mode: standalone)').matches||navigator.standalone)?`<p class="muted" style="margin:4px 0 0;font-weight:700;font-size:.9rem">Already learning in Safari or Chrome? The Home Screen app keeps its own progress. In the browser, go to Me → Backup &amp; move devices and copy the code, then come back here.</p>`:''}
+    ${first?`<button class="link" data-a="importbk">Restore progress from a backup code</button>`:''}
     ${first?'':`<button class="link" data-a="tab" data-v="family">Cancel</button>`}
    </div></main>`;
   $('#nm').addEventListener('input',e=>draft.name=e.target.value);
@@ -645,6 +661,7 @@ A.start=v=>{
 };
 function cur(){return L.q[L.i]}
 function renderLesson(){
+  saveLesson();
   const p=P(),ex=cur(),l=LANGS[p.lang];
   const prog=Math.round(L.i/L.q.length*100);
   let body='';const tl=l.name;
@@ -809,6 +826,7 @@ function finishLesson(){
   view={tab:'result'};render();
 }
 function renderResult(){
+  saveLesson();
   const r=L.result,p=P();
   const t=`${Math.floor(r.secs/60)}:${String(r.secs%60).padStart(2,'0')}`;
   app.innerHTML=`<div class="result">${mascot()}
@@ -1037,10 +1055,22 @@ A.dodel=()=>{S.profiles=S.profiles.filter(x=>x.id!==S.cur);S.cur=S.profiles[0]?S
 
 
 /* boot */
+function resumeFrom(raw){try{const r=JSON.parse(raw||'null');if(r&&r.L&&r.pid===S.cur&&P()){L=r.L;L.listening=false;view={tab:r.tab};return true}}catch(e){}return false}
 S=load();
 if(S.cur&&!P())S.cur=S.profiles[0]?S.profiles[0].id:null;
 view={tab:P()?'learn':'welcome'};
+{let raw=null;try{raw=localStorage.getItem(KEY+'.lesson')}catch(e){}resumeFrom(raw)}
 render();
+Promise.all([idbGet(KEY),idbGet(KEY+'.lesson')]).then(([j,les])=>{
+  let d=null;try{d=JSON.parse(j||'null')}catch(e){}
+  if(d&&d.profiles&&d.profiles.length&&(d.savedAt||0)>(S.savedAt||0)&&!['lesson','result','game'].includes(view.tab)){
+    S=d;if(!P())S.cur=S.profiles[0].id;try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}
+    if(!resumeFrom(les))view={tab:'learn'};render();toast('Your progress was restored');
+  }
+});
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist().catch(()=>{})}catch(e){}
+addEventListener('pagehide',()=>{if(S.profiles.length)save()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.profiles.length)save()});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&P()&&['learn','practice','games','family','me'].includes(view.tab))render()});
 if('serviceWorker' in navigator&&location.protocol==='https:'&&/github\.io$|netlify\.app$|pages\.dev$/.test(location.hostname)){navigator.serviceWorker.register('sw.js').catch(()=>{})}
 })();
